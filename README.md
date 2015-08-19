@@ -15,7 +15,7 @@ Register Oracle adapter on app.json as follows:
               "sid":"orcl",
               "schema":"public"
             }
+        }
     }
-}
 
 If you are intended to use Oracle adapter as the default database adapter set the property "default" to true. 
