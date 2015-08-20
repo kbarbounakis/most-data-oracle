@@ -1,0 +1,32 @@
+{
+  "name": "most-data-oracle",
+  "version": "0.1.0",
+  "description": "MOST Web Framework Oracle Data Adapter",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kbarbounakis/most-data-oracle.git"
+  },
+  "keywords": [
+    "data",
+    "db",
+    "oracle",
+    "orm",
+    "most",
+    "database"
+  ],
+  "author": "Kyriakos Barbounakis <k.barbounakis@gmail.com>",
+  "license": "BSD3-Clause",
+  "bugs": {
+    "url": "https://github.com/kbarbounakis/most-data-oracle/issues"
+  },
+  "homepage": "https://github.com/kbarbounakis/most-data-oracle",
+  "dependencies": {
+    "async": "^1.4.2",
+    "most-query": "~0.1.21",
+    "oracledb": "^1.0.0"
+  }
+}

@@ -15,10 +15,10 @@ Register Oracle adapter on app.json as follows:
         { "name":"development", "invariantName":"oracle", "default":true,
             "options": {
               "host":"localhost",
-              "post":1521,
+              "port":1521,
               "user":"user",
               "password":"password",
-              "sid":"orcl",
+              "service":"orcl",
               "schema":"public"
             }
         }
