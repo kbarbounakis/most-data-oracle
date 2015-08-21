@@ -164,7 +164,7 @@ OracleAdapter.formatType = function(field)
             break;
         case 'Date':
         case 'DateTime':
-            s = 'TIMESTAMP WITH TIME ZONE';
+            s = 'TIMESTAMP WITH LOCAL TIME ZONE';
             break;
         case 'Time':
             s = 'NUMBER';
@@ -300,8 +300,9 @@ OracleAdapter.prototype.migrate = function(obj, callback) {
             //create migrations table
 
             async.eachSeries([
-                'CREATE TABLE "migrations"("appliesTo" NVARCHAR2(255) NOT NULL, "model" NVARCHAR2(255) NULL, ' +
-                '"description" NVARCHAR2(255),"version" NVARCHAR2(24) NOT NULL)'
+                'CREATE TABLE "migrations"("id" NUMBER(10) NOT NULL, "appliesTo" NVARCHAR2(255) NOT NULL, "model" NVARCHAR2(255) NULL, ' +
+                '"description" NVARCHAR2(255),"version" NVARCHAR2(24) NOT NULL, CONSTRAINT "migrations_pk" PRIMARY KEY ("id"))',
+                'CREATE SEQUENCE "migrations_id_seq" START WITH 1 INCREMENT BY 1'
             ], function(s, cb0) {
                 self.execute(s, [], cb0)
             }, function(err) {
@@ -367,6 +368,11 @@ OracleAdapter.prototype.migrate = function(obj, callback) {
                     function(x) {
                         return format('"%f" %t', x);
                     }).join(', ');
+                //add primary key constraint
+                var pk = migration.add.find(function(x) { return x.primary == 1; });
+                if (pk) {
+                    strFields += ',' + util.format('CONSTRAINT "%s_pk" PRIMARY KEY ("%s")', migration.appliesTo, pk.name);
+                }
                 var sql = util.format('CREATE TABLE "%s" (%s)', migration.appliesTo, strFields);
                 self.execute(sql, null, function(err) {
                     if (err) { cb(err); return; }
@@ -374,7 +380,6 @@ OracleAdapter.prototype.migrate = function(obj, callback) {
                 });
             }
             else if (args[0] == 1) {
-
                 var expressions = [],
                     /**
                      * @type {{columnName:string,ordinal:number,dataType:*, maxLength:number,isNullable:number,,primary:boolean }[]}
@@ -490,7 +495,7 @@ OracleAdapter.prototype.migrate = function(obj, callback) {
         function(arg, cb) {
             if (arg>0) {
                 //log migration to database
-                self.execute('INSERT INTO "migrations"("appliesTo", "model", "version", "description") VALUES (?,?,?,?)', [migration.appliesTo,
+                self.execute('INSERT INTO "migrations"("id","appliesTo", "model", "version", "description") VALUES ("migrations_id_seq".nextval,?,?,?,?)', [migration.appliesTo,
                     migration.model,
                     migration.version,
                     migration.description ], function(err, result) {
@@ -521,55 +526,38 @@ OracleAdapter.prototype.migrate = function(obj, callback) {
 OracleAdapter.prototype.selectIdentity = function(entity, attribute , callback) {
 
     var self = this;
-
-    var migration = {
-        appliesTo:'increment_id',
-        model:'increments',
-        description:'Increments migration (version 1.0)',
-        version:'1.0',
-        add:[
-            { name:'id', type:'Counter', primary:true },
-            { name:'entity', type:'Text', size:120 },
-            { name:'attribute', type:'Text', size:120 },
-            { name:'value', type:'Integer' }
-        ]
-    }
-    //ensure increments entity
-    self.migrate(migration, function(err)
-    {
-        //throw error if any
-        if (err) { callback.call(self,err); return; }
-        self.execute('SELECT * FROM increment_id WHERE entity=? AND attribute=?', [entity, attribute], function(err, result) {
-            if (err) { callback.call(self,err); return; }
-            if (result.length==0) {
-                //get max value by querying the given entity
-                var q = qry.query(entity).select([qry.fields.max(attribute)]);
-                self.execute(q,null, function(err, result) {
-                    if (err) { callback.call(self, err); return; }
-                    var value = 1;
-                    if (result.length>0) {
-                        value = parseInt(result[0][attribute]) + 1;
-                    }
-                    self.execute('INSERT INTO increment_id(entity, attribute, value) VALUES (?,?,?)',[entity, attribute, value], function(err) {
-                        //throw error if any
-                        if (err) { callback.call(self, err); return; }
-                        //return new increment value
-                        callback.call(self, err, value);
-                    });
+    //format sequence name ([entity]_[attribute]_seg e.g. user_id_seq)
+    var name = entity + "_" + attribute + "_seq";
+    //search for sequence
+    self.execute('SELECT SEQUENCE_OWNER,SEQUENCE_NAME FROM ALL_SEQUENCES WHERE "SEQUENCE_NAME" = ?', [name], function(err, result) {
+        if (err) { return callback(err); }
+        if (result.length==0) {
+            self.execute(util.format('CREATE SEQUENCE "%s" START WITH 1 INCREMENT BY 1', name), [], function(err, result) {
+                if (err) { return callback(err); }
+                //get next value
+                self.execute(util.format('SELECT "%s".nextval AS "resultId" FROM DUAL', name), [], function(err, result) {
+                    if (err) { return callback(err); }
+                    callback(null, result[0]['resultId']);
                 });
-            }
-            else {
-                //get new increment value
-                var value = parseInt(result[0].value) + 1;
-                self.execute('UPDATE increment_id SET value=? WHERE id=?',[value, result[0].id], function(err) {
-                    //throw error if any
-                    if (err) { callback.call(self, err); return; }
-                    //return new increment value
-                    callback.call(self, err, value);
-                });
-            }
-        });
+            });
+        }
+        else {
+            //get next value
+            self.execute(util.format('SELECT "%s".nextval AS "resultId" FROM DUAL', name), [], function(err, result) {
+                if (err) { return callback(err); }
+                callback(null, result[0]['resultId']);
+            });
+        }
     });
+};
+/**
+ * Produces a new counter auto increment value for the given entity and attribute.
+ * @param entity {String} The target entity name
+ * @param attribute {String} The target attribute
+ * @param callback {Function=}
+ */
+OracleAdapter.prototype.nextIdentity = function(entity, attribute , callback) {
+    this.selectIdentity(entity, attribute , callback);
 };
 
 /**
@@ -766,6 +754,11 @@ OracleAdapter.prototype.execute = function(query, values, callback) {
             //format query expression or any object that may be act as query expression
             var formatter = new OracleFormatter();
             sql = formatter.format(query);
+            //if query is fixed (an SQL expression without any table definition)
+            if (query.$fixed == true) {
+                //use dymmy oracle table DUAL
+                sql += ' FROM DUAL';
+            }
         }
         //validate sql statement
         if (typeof sql !== 'string') {
@@ -806,6 +799,15 @@ OracleAdapter.prototype.execute = function(query, values, callback) {
 
 };
 
+function zeroPad(number, length) {
+    number = number || 0;
+    var res = number.toString();
+    while (res.length < length) {
+        res = '0' + res;
+    }
+    return res;
+}
+
 /**
  * @class OracleFormatter
  * @constructor
@@ -839,20 +841,60 @@ var REGEXP_SINGLE_QUOTE=/\\'/g, SINGLE_QUOTE_ESCAPE ='\'\'',
 OracleFormatter.prototype.escape = function(value,unquoted)
 {
     if (typeof value === 'boolean') { return value ? '1' : '0'; }
+    if (value instanceof Date) {
+        return util.format('TO_TIMESTAMP_TZ(%s, \'YYYY-MM-DD HH24:MI:SS.FF3TZH:TZM\')', this.escapeDate(value));
+    }
     var res = OracleFormatter.super_.prototype.escape.call(this, value, unquoted);
     if (typeof value === 'string') {
-        if (/\\'/g.test(res))
-        //escape single quote (that is already escaped)
+        if (/\\'/g.test(res)) {
+            //escape single quote (that is already escaped)
             res = res.replace(/\\'/g, SINGLE_QUOTE_ESCAPE);
-        if (/\\"/g.test(res))
-        //escape double quote (that is already escaped)
-            res = res.replace(/\\"/g, DOUBLE_QUOTE_ESCAPE);
-        if (/\\\\/g.test(res))
-        //escape slash (that is already escaped)
-            res = res.replace(/\\\\/g, SLASH_ESCAPE);
+            if (/\\"/g.test(res))
+            //escape double quote (that is already escaped)
+                res = res.replace(/\\"/g, DOUBLE_QUOTE_ESCAPE);
+            if (/\\\\/g.test(res))
+            //escape slash (that is already escaped)
+                res = res.replace(/\\\\/g, SLASH_ESCAPE);
+        }
     }
     return res;
 };
+/**
+ * @param {Date|*} val
+ * @returns {string}
+ */
+OracleFormatter.prototype.escapeDate = function(val) {
+    var year   = val.getFullYear();
+    var month  = zeroPad(val.getMonth() + 1, 2);
+    var day    = zeroPad(val.getDate(), 2);
+    var hour   = zeroPad(val.getHours(), 2);
+    var minute = zeroPad(val.getMinutes(), 2);
+    var second = zeroPad(val.getSeconds(), 2);
+    //var millisecond = zeroPad(dt.getMilliseconds(), 3);
+    //format timezone
+    var offset = (new Date()).getTimezoneOffset(),
+        timezone = (offset<=0 ? '+' : '-') + zeroPad(-Math.floor(offset/60),2) + ':' + zeroPad(offset%60,2);
+    return "'" + year + '-' + month + '-' + day + ' ' + hour + ':' + minute + ':' + second + "." + zeroPad(val.getMilliseconds(), 3) + timezone + "'";
+};
+
+/**
+ *
+ * @param {QueryExpression} obj
+ * @returns {string}
+ */
+OracleFormatter.prototype.formatLimitSelect = function(obj) {
+
+    var sql=this.formatSelect(obj);
+    if (obj.$take) {
+        if (obj.$skip) {
+            return 'SELECT * FROM ( ' +  sql + ' ) where ROWNUM <= ' + (obj.$take + obj.$skip).toString() + ' ROWNUM > ' + obj.$skip.toString();
+        }
+        else {
+            return 'SELECT * FROM ( ' +  sql + ' ) where ROWNUM <= ' + obj.$take.toString();
+        }
+    }
+    return sql;
+}
 
 /**
  * Implements indexOf(str,substr) expression formatter.
@@ -909,7 +951,7 @@ OracleFormatter.prototype.$startswith = function(p0, p1)
     //validate params
     if (Object.isNullOrUndefined(p0) || Object.isNullOrUndefined(p1))
         return '';
-    return 'REGEXP_LIKE(owner,' + this.escape(p0) + ',\'^' + this.escape(p1, true) + '\')';
+    return 'REGEXP_LIKE(' + this.escape(p0) + ',\'^' + this.escape(p1, true) + '\')';
 };
 
 OracleFormatter.prototype.$contains = function(p0, p1)
@@ -917,7 +959,7 @@ OracleFormatter.prototype.$contains = function(p0, p1)
     //validate params
     if (Object.isNullOrUndefined(p0) || Object.isNullOrUndefined(p1))
         return '';
-    return 'REGEXP_LIKE(owner,' + this.escape(p0) + ',\'' + this.escape(p1, true) + '\')';
+    return 'REGEXP_LIKE(' + this.escape(p0) + ',\'' + this.escape(p1, true) + '\')';
 };
 
 OracleFormatter.prototype.$endswith = function(p0, p1)
@@ -925,16 +967,31 @@ OracleFormatter.prototype.$endswith = function(p0, p1)
     //validate params
     if (Object.isNullOrUndefined(p0) || Object.isNullOrUndefined(p1))
         return '';
-    return 'REGEXP_LIKE(owner,' + this.escape(p0) + ',\'' + this.escape(p1, true) + '$\')';
+    return 'REGEXP_LIKE(' + this.escape(p0) + ',\'' + this.escape(p1, true) + '$\')';
 };
 
-OracleFormatter.prototype.$day = function(p0) { return util.format('CAST(TO_CHAR(%s,\'DD\') AS NUMBER)', this.escape(p0)) ; };
-OracleFormatter.prototype.$month = function(p0) { return util.format('CAST(TO_CHAR(%s,\'MM\') AS NUMBER)', this.escape(p0)) ; };
-OracleFormatter.prototype.$year = function(p0) { return util.format('CAST(TO_CHAR(%s,\'YYYY\') AS NUMBER)', this.escape(p0)) ; };
-OracleFormatter.prototype.$hour = function(p0) { return util.format('CAST(TO_CHAR(%s,\'HH24\') AS NUMBER)', this.escape(p0)) ; };
-OracleFormatter.prototype.$minute = function(p0) { return util.format('CAST(TO_CHAR(%s,\'MI\') AS NUMBER)', this.escape(p0)) ; };
-OracleFormatter.prototype.$second = function(p0) { return util.format('CAST(TO_CHAR(%s,\'SS\') AS NUMBER)', this.escape(p0)) ; };
-OracleFormatter.prototype.$date = function(p0) { return util.format('TO_TIMESTAMP_TZ(TO_CHAR(%s, \'YYYY-MM-DD\'),\'YYYY-MM-DD\')', this.escape(p0)) ; };
+OracleFormatter.prototype.$day = function(p0) {
+    return util.format('EXTRACT(DAY FROM %s)', this.escape(p0)) ;
+};
+OracleFormatter.prototype.$month = function(p0) {
+    return util.format('EXTRACT(MONTH FROM %s)', this.escape(p0)) ;
+};
+OracleFormatter.prototype.$year = function(p0) {
+    return util.format('EXTRACT(YEAR FROM %s)', this.escape(p0)) ;
+};
+OracleFormatter.prototype.$hour = function(p0) {
+    return util.format('EXTRACT(HOUR FROM %s)', this.escape(p0)) ;
+};
+OracleFormatter.prototype.$minute = function(p0) {
+    return util.format('EXTRACT(MINUTE FROM %s)', this.escape(p0)) ;
+};
+OracleFormatter.prototype.$second = function(p0) {
+    return util.format('EXTRACT(SECOND FROM %s)', this.escape(p0)) ;
+};
+OracleFormatter.prototype.$date = function(p0) {
+    //alternative date solution: 'TO_TIMESTAMP_TZ(TO_CHAR(%s, 'YYYY-MM-DD'),'YYYY-MM-DD')'
+    return util.format('TRUNC(%s)', this.escape(p0)) ;
+};
 
 var orsql = {
     /**
