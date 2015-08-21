@@ -1,4 +1,4 @@
-# most-data-oracle (in progress)
+# most-data-oracle
 Most Web Framework Oracle Adapter
 ##Install
 $ npm install most-data-oracle
