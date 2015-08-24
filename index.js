@@ -147,34 +147,41 @@ OracleAdapter.formatType = function(field)
             s = 'NUMBER(1,0)';
             break;
         case 'Byte':
-            s = 'NUMBER(1,0)';
+            s = 'NUMBER(3,0)';
             break;
         case 'Number':
+            s = 'NUMBER(38)';
+            break;
         case 'Float':
-            s = 'NUMBER';
+            s = 'NUMBER(19,4)';
             break;
         case 'Counter':
-            return 'NUMBER(10)';
+            return 'NUMBER(19,0)';
         case 'Currency':
             s =  'NUMBER(' + (field.size || 19) + ',4)';
             break;
         case 'Decimal':
             s =  'NUMBER';
-            if ((field.size) && (field.scale)) { s += '(' + field.size + ',' + field.scale + ')'; }
+            if ((field.size) && (field.scale)) {
+                s += '(' + field.size + ',' + field.scale + ')';
+            }
+            else {
+                s += '(19,4)'
+            }
             break;
         case 'Date':
         case 'DateTime':
-            s = 'TIMESTAMP WITH LOCAL TIME ZONE';
+            s = 'TIMESTAMP(6) WITH LOCAL TIME ZONE';
             break;
         case 'Time':
-            s = 'NUMBER';
+            s = 'NUMBER(19,4)';
             break;
         case 'Long':
         case 'Duration':
-            s = 'NUMBER(10)';
+            s = 'NUMBER(19,0)';
             break;
         case 'Integer':
-            s = 'NUMBER' + (field.size ? '(' + field.size + ')':'(10)' );
+            s = 'NUMBER' + (field.size ? '(' + field.size + ',0)':'(19,0)' );
             break;
         case 'URL':
         case 'Text':
@@ -183,16 +190,16 @@ OracleAdapter.formatType = function(field)
             break;
         case 'Image':
         case 'Binary':
-            s ='BLOB';
+            s ='LONG RAW';
             break;
         case 'Guid':
             s = 'VARCHAR2(36)';
             break;
         case 'Short':
-            s = 'NUMBER(2,0)';
+            s = 'NUMBER(5,0)';
             break;
         default:
-            s = 'NUMBER';
+            s = 'NUMBER(19,0)';
             break;
     }
     if (field.primary) {
@@ -342,150 +349,88 @@ OracleAdapter.prototype.migrate = function(obj, callback) {
                     if (err) { cb(err); return; }
                     cb(null, exists ? 1 : 0);
                 });
-
             }
-        },
-        //4. Get table columns
-        function(arg, cb) {
-            //migration has already been applied
-            if (arg<0) { cb(null, [arg, null]); return; }
-            self.table(migration.appliesTo).columns(function(err, columns) {
-                if (err) { cb(err); return; }
-                cb(null, [arg, columns]);
-            });
         },
         //5. Migrate target table (create or alter)
-        function(args, cb) {
+        function(arg, cb) {
             //migration has already been applied (args[0]=-1)
-            if (args[0] < 0) {
-                cb(null, args[0]);
+            if (arg < 0) {
+                cb(null, arg);
             }
-            else if (args[0] == 0) {
-                //create table
-                var strFields = migration.add.filter(function(x) {
-                    return !x['oneToMany']
-                }).map(
-                    function(x) {
-                        return format('"%f" %t', x);
-                    }).join(', ');
-                //add primary key constraint
-                var pk = migration.add.find(function(x) { return x.primary == 1; });
-                if (pk) {
-                    strFields += ',' + util.format('CONSTRAINT "%s_pk" PRIMARY KEY ("%s")', migration.appliesTo, pk.name);
-                }
-                var sql = util.format('CREATE TABLE "%s" (%s)', migration.appliesTo, strFields);
-                self.execute(sql, null, function(err) {
-                    if (err) { cb(err); return; }
+            else if (arg == 0) {
+                self.table(migration.appliesTo).create(migration.add, function(err) {
+                    if (err) { return cb(err); }
                     cb(null, 1);
                 });
             }
-            else if (args[0] == 1) {
-                var expressions = [],
-                    /**
-                     * @type {{columnName:string,ordinal:number,dataType:*, maxLength:number,isNullable:number,,primary:boolean }[]}
-                     */
-                    columns = args[1], forceAlter = false, column, newType, oldType;
+            else if (arg == 1) {
+                var column, newType, oldType;
                 //validate operations
 
                 //1. columns to be removed
                 if (util.isArray(migration.remove)) {
-                    if (migration.remove>0) {
-                        for (var i = 0; i < migration.remove.length; i++) {
-                            var x = migration.remove[i];
-                            var colIndex = columns.indexOf(function(y) { return y.name== x.name; });
-                            if (colIndex>=0) {
-                                if (!columns[colIndex].primary) {
-                                    forceAlter = true;
-                                }
-                                else {
-                                    migration.remove.splice(i, 1);
-                                    i-=1;
-                                }
-                            }
-                            else {
-                                migration.remove.splice(i, 1);
-                                i-=1;
-                            }
-                        }
+                    if (migration.remove.length>0) {
+                        return cb(new Error('Data migration remove operation is not supported by this adapter.'));
                     }
                 }
                 //1. columns to be changed
                 if (util.isArray(migration.change)) {
-                    if (migration.change>0) {
-
-                        for (var i = 0; i < migration.change.length; i++) {
-                            var x = migration.change[i];
-                            column = columns.find(function(y) { return y.name==x.name; });
-                            if (column) {
-                                if (!column.primary) {
-                                    //validate new column type (e.g. TEXT(120,0) NOT NULL)
-                                    newType = format('%t', x); oldType = column.type.toUpperCase().concat(column.nullable ? ' NOT NULL' : ' NULL');
-                                    if ((newType!=oldType)) {
-                                        //force alter
-                                        forceAlter = true;
-                                    }
-                                }
-                                else {
-                                    //remove column from change collection (because it's a primary key)
-                                    migration.change.splice(i, 1);
-                                    i-=1;
-                                }
-                            }
-                            else {
-                                //add column (column was not found in table)
-                                migration.add.push(x);
-                                //remove column from change collection
-                                migration.change.splice(i, 1);
-                                i-=1;
-                            }
-
-                        }
-
+                    if (migration.change.length>0) {
+                        return cb(new Error('Data migration change operation is not supported by this adapter. Use add collection instead.'));
                     }
                 }
-                if (util.isArray(migration.add)) {
 
-                    for (var i = 0; i < migration.add.length; i++) {
-                        var x = migration.add[i];
-                        column = columns.find(function(y) { return (y.name==x.name); });
-                        if (column) {
-                            if (column.primary) {
-                                migration.add.splice(i, 1);
-                                i-=1;
-                            }
-                            else {
-                                newType = format('%t', x); oldType = column.type.toUpperCase().concat(column.nullable ? ' NOT NULL' : ' NULL');
-                                if (newType==oldType) {
-                                    //remove column from add collection
+                if (util.isArray(migration.add)) {
+                    //init change collection
+                    migration.change = [];
+                    //get table columns
+                    self.table(migration.appliesTo).columns(function(err, columns) {
+                        if (err) { return cb(err); }
+                        for (var i = 0; i < migration.add.length; i++) {
+                            var x = migration.add[i];
+                            column = columns.find(function(y) { return (y.name==x.name); });
+                            if (column) {
+                                //if column is primary key remove it from collection
+                                if (column.primary) {
                                     migration.add.splice(i, 1);
                                     i-=1;
                                 }
                                 else {
-                                    forceAlter = true;
+                                    newType = format('%t', x);
+                                    if (column.precision != null && column.scale != null) {
+                                        oldType = util.format('%s(%s,%s) %s', column.type.toUpperCase(), column.precision.toString(), column.scale.toString(), (column.nullable ? 'NULL' : 'NOT NULL'));
+                                    }
+                                    else if (/^TIMESTAMP\(\d+\) WITH LOCAL TIME ZONE$/i.test(column.type)) {
+                                        oldType=util.format('%s %s', column.type.toUpperCase(), (column.nullable ? 'NULL' : 'NOT NULL'));
+                                    }
+                                    else if (column.size != null) {
+                                        oldType = util.format('%s(%s) %s', column.type.toUpperCase(), column.size.toString(), (column.nullable ? 'NULL' : 'NOT NULL'));
+                                    }
+                                    else {
+                                        oldType = util.format('%s %s', column.type.toUpperCase(), (column.nullable ? 'NULL' : 'NOT NULL'));
+                                    }
+                                    //remove column from collection
+                                    migration.add.splice(i, 1);
+                                    i-=1;
+                                    if (newType !== oldType) {
+                                        //add column to alter collection
+                                        migration.change.push(x);
+                                    }
                                 }
                             }
                         }
-                    }
-                    if (forceAlter) {
-                        cb(new Error('Full table migration is not yet implemented.'));
-                        return;
-                    }
-                    else {
-                        migration.add.forEach(function(x) {
-                            //search for columns
-                            expressions.push(util.format('ALTER TABLE "%s" ADD COLUMN "%s" %s', migration.appliesTo, x.name, OracleAdapter.formatType(x)));
+                        //alter table
+                        var targetTable = self.table(migration.appliesTo);
+                        //add new columns (if any)
+                        targetTable.add(migration.add, function(err) {
+                            if (err) { return cb(err); }
+                            //modify columns (if any)
+                            targetTable.change(migration.change, function(err) {
+                                if (err) { return cb(err); }
+                                cb(null, 1);
+                            });
                         });
-                    }
-
-                }
-                if (expressions.length>0) {
-                    self.execute(expressions.join(';'), [], function(err) {
-                        if (err) { cb(err); return; }
-                        cb(null, 1);
                     });
-                }
-                else {
-                    cb(null, 2);
                 }
             }
             else {
@@ -574,14 +519,30 @@ OracleAdapter.prototype.table = function(name) {
     var self = this, owner, table;
     var matches = /(\w+)\.(\w+)/.exec(name);
     if (matches) {
-        //get schema owner
+        //get schema owner (the first part of the string provided)
         owner = matches[1];
-        //get table name
+        //get table name (the second part of the string provided)
         table = matches[2];
     }
     else {
+        //get table name (the whole string provided)
         table = name;
+        //get schema name (from options)
+        if (self.options && self.options.schema) {
+            owner = self.options.schema;
+        }
     }
+
+    var format = function(format, obj)
+    {
+        var result = format;
+        if (/%t/.test(format))
+            result = result.replace(/%t/g,OracleAdapter.formatType(obj));
+        if (/%f/.test(format))
+            result = result.replace(/%f/g,obj.name);
+        return result;
+    };
+
     return {
         /**
          * @param {function(Error,Boolean=)} callback
@@ -639,8 +600,8 @@ OracleAdapter.prototype.table = function(name) {
              AND c0.OWNER=t0.OWNER AND c0.COLUMN_NAME=t0.COLUMN_NAME WHERE c0.TABLE_NAME = ?
             */
 
-            var sql = 'SELECT c0.COLUMN_NAME AS "name", c0.DATA_TYPE AS "type", ROWNUM AS "ordinal", c0.DATA_LENGTH AS "size", ' +
-                'c0.DATA_SCALE AS "scale", CASE WHEN c0.NULLABLE=\'Y\' THEN 1 ELSE 0 END AS "nullable", CASE WHEN t0.CONSTRAINT_TYPE=\'P\' ' +
+            var sql = 'SELECT c0.COLUMN_NAME AS "name", c0.DATA_TYPE AS "type", ROWNUM AS "ordinal", CASE WHEN c0."CHAR_LENGTH">0 THEN c0."CHAR_LENGTH" ELSE c0.DATA_LENGTH END as "size", ' +
+                'c0.DATA_SCALE AS "scale", c0.DATA_PRECISION AS "precision", CASE WHEN c0.NULLABLE=\'Y\' THEN 1 ELSE 0 END AS "nullable", CASE WHEN t0.CONSTRAINT_TYPE=\'P\' ' +
             'THEN 1 ELSE 0 END AS "primary" FROM ALL_TAB_COLUMNS c0 LEFT JOIN (SELECT cols.table_name, cols.column_name, cols.owner, ' +
             'cons.constraint_type FROM all_constraints cons, all_cons_columns cols WHERE cons.constraint_type = \'P\' ' +
             'AND cons.constraint_name = cols.constraint_name AND cons.owner = cols.owner) t0 ON c0.TABLE_NAME=t0.TABLE_NAME ' +
@@ -650,6 +611,99 @@ OracleAdapter.prototype.table = function(name) {
                     if (err) { callback(err); return; }
                     callback(null, result);
                 });
+        },
+        /**
+         * @param {{name:string,type:string,primary:boolean|number,nullable:boolean|number,size:number, scale:number,precision:number,oneToMany:boolean}[]|*} fields
+         * @param callback
+         */
+        create: function(fields, callback) {
+            callback = callback || function() {};
+            fields = fields || [];
+            if (!util.isArray(fields)) {
+                return callback(new Error('Invalid argument type. Expected Array.'))
+            }
+            if (fields.length == 0) {
+                return callback(new Error('Invalid argument. Fields collection cannot be empty.'))
+            }
+            var strFields = fields.filter(function(x) {
+                return !x.oneToMany
+            }).map(
+                function(x) {
+                    return format('"%f" %t', x);
+                }).join(', ');
+            //get table qualified name
+            var strTable = '', formatter = new OracleFormatter();
+            if (typeof owner !== 'undefined') { strTable = formatter.escapeName(owner) + "." }
+            strTable += formatter.escapeName(table);
+            //add primary key constraint
+            var strPKFields = fields.filter(function(x) { return (x.primary == true || x.primary == 1); }).map(function(x) {
+                return formatter.escapeName(x.name);
+            }).join(', ');
+            if (strPKFields.length>0) {
+                strFields += ', ' + util.format('CONSTRAINT "%s_pk" PRIMARY KEY (%s)', table, strPKFields);
+            }
+            var sql = util.format('CREATE TABLE %s (%s)', strTable, strFields);
+            self.execute(sql, null, function(err) {
+                callback(err);
+            });
+        },
+        /**
+         * Alters the table by adding an array of fields
+         * @param {{name:string,type:string,primary:boolean|number,nullable:boolean|number,size:number,oneToMany:boolean}[]|*} fields
+         * @param callback
+         */
+        add:function(fields, callback) {
+            callback = callback || function() {};
+            fields = fields || [];
+            if (!util.isArray(fields)) {
+                //invalid argument exception
+                return callback(new Error('Invalid argument type. Expected Array.'))
+            }
+            if (fields.length == 0) {
+                //do nothing
+                return callback();
+            }
+            var strFields = fields.map(function(x) {
+                return format('"%f" %t', x);
+            }).join(', ');
+            //get table qualified name
+            var strTable = '', formatter = new OracleFormatter();
+            if (typeof owner !== 'undefined') { strTable = formatter.escapeName(owner) + "." }
+            strTable += formatter.escapeName(table);
+            //generate SQL statement
+            var sql = util.format('ALTER TABLE %s ADD (%s)', strTable, strFields);
+            self.execute(sql, [], function(err) {
+                callback(err);
+            });
+        },
+        /**
+         * Alters the table by modifying an array of fields
+         * @param {{name:string,type:string,primary:boolean|number,nullable:boolean|number,size:number,oneToMany:boolean}[]|*} fields
+         * @param callback
+         */
+        change:function(fields, callback) {
+            callback = callback || function() {};
+            fields = fields || [];
+            if (!util.isArray(fields)) {
+                //invalid argument exception
+                return callback(new Error('Invalid argument type. Expected Array.'))
+            }
+            if (fields.length == 0) {
+                //do nothing
+                return callback();
+            }
+            var strFields = fields.map(function(x) {
+                return format('"%f" %t', x);
+            }).join(', ');
+            //get table qualified name
+            var strTable = '', formatter = new OracleFormatter();
+            if (typeof owner !== 'undefined') { strTable = formatter.escapeName(owner) + "." }
+            strTable += formatter.escapeName(table);
+            //generate SQL statement
+            var sql = util.format('ALTER TABLE %s MODIFY (%s)', strTable, strFields);
+            self.execute(sql, [], function(err) {
+                callback(err);
+            });
         }
     }
 
@@ -657,6 +711,7 @@ OracleAdapter.prototype.table = function(name) {
 
 OracleAdapter.prototype.view = function(name) {
     var self = this, owner, view;
+
     var matches = /(\w+)\.(\w+)/.exec(name);
     if (matches) {
         //get schema owner
@@ -722,7 +777,7 @@ OracleAdapter.prototype.view = function(name) {
                         var sql = util.format('CREATE VIEW "%s" AS ',name);
                         var formatter = new OracleFormatter();
                         sql += formatter.format(q);
-                        self.execute(sql, undefined, tr);
+                        self.execute(sql, [], tr);
                     }
                     catch(e) {
                         tr(e);
