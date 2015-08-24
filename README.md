@@ -19,7 +19,7 @@ Register Oracle adapter on app.json as follows:
               "user":"user",
               "password":"password",
               "service":"orcl",
-              "schema":"public"
+              "schema":"PUBLIC"
             }
         }
         ...
