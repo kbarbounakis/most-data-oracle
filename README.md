@@ -25,4 +25,7 @@ Register Oracle adapter on app.json as follows:
         ...
     ]
 
-If you are intended to use Oracle adapter as the default database adapter set the property "default" to true. 
+If you are intended to use Oracle adapter as the default database adapter set the property "default" to true.
+
+ Note: Most Web Framework Oracle Adapter depends on Oracle Database driver for Node.js maintained by Oracle Corp.
+ Before install it, read installation instructions [here][here](/oracle/node-oracledb/blob/master/INSTALL.md)
