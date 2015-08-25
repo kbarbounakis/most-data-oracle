@@ -432,6 +432,9 @@ OracleAdapter.prototype.migrate = function(obj, callback) {
                         });
                     });
                 }
+                else {
+                    cb(new Error('Invalid migration data.'));
+                }
             }
             else {
                 cb(new Error('Invalid table status.'));
