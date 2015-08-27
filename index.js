@@ -966,6 +966,17 @@ OracleFormatter.prototype.$indexof = function(p0, p1)
 };
 
 /**
+ * Implements contains(a,b) expression formatter.
+ * @param {string} p0 The source string
+ * @param {string} p1 The string to search for
+ * @returns {string}
+ */
+OracleFormatter.prototype.$text = function(p0, p1)
+{
+    return util.format('(INSTR(%s,%s)-1)>=0', this.escape(p0), this.escape(p1));
+};
+
+/**
  * Implements concat(a,b) expression formatter.
  * @param {*} p0
  * @param {*} p1
