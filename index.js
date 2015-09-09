@@ -1062,6 +1062,20 @@ OracleFormatter.prototype.$date = function(p0) {
     return util.format('TRUNC(%s)', this.escape(p0)) ;
 };
 
+/**
+ * Implements contains(a,b) expression formatter.
+ * @param {string} p0 The source string
+ * @param {string} p1 The string to search for
+ * @returns {string}
+ */
+OracleFormatter.prototype.$regex = function(p0, p1)
+{
+    //validate params
+    if (Object.isNullOrUndefined(p0) || Object.isNullOrUndefined(p1))
+        return '';
+    return 'REGEXP_LIKE(' + this.escape(p0) + ',\'' + this.escape(p1, true) + '\')';
+};
+
 var orsql = {
     /**
      * @constructs OracleAdapter
